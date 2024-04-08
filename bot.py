@@ -1,4 +1,6 @@
 #@title Полный код бота для самоконтроля
+
+
 import aiosqlite
 import asyncio
 import logging
@@ -17,7 +19,7 @@ API_TOKEN = '6806372479:AAHTiIRPU6zFdXlZhpm9mg4bW-e_3kHe3p8'
 # Зададим имя базы данных
 DB_NAME = 'quiz_bot.db'
 
-DICT_DATA = 'data/quiz_data.json'
+DICT_DATA = 'quiz_data.json'
 
 # Объект бота
 bot = Bot(token=API_TOKEN)
