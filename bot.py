@@ -1,235 +1,126 @@
-# Установим необходимые библиотеки
-#!pip install aiosqlite
-#!pip install aiogram
-# Установим библиотеку nest_asyncio
-#!pip install nest_asyncio
-import nest_asyncio
-nest_asyncio.apply()
+from aiogram import Bot
+from aiogram import Dispatcher
+from aiogram import executor
+from aiogram.utils import deep_linking
+#from aiogram.utils import executor
 
-#@title Полный код бота для самоконтроля
-
-import aiosqlite
-
-
-# Запускаем создание таблицы базы данных
-#await create_table()
-
-
+from aiogram.types import InlineKeyboardButton
+from aiogram.types import InlineKeyboardMarkup
+from aiogram.types import CallbackQuery
+from aiogram.types import Message
+from json import dumps
+from json import loads
+from json import load
+import sys
 import os
-import aiosqlite
-import asyncio
-import logging
+import db
+import config
 import json
-from aiogram import Bot, Dispatcher, types, F
-from aiogram.filters.command import Command
-from aiogram.utils.keyboard import InlineKeyboardBuilder, ReplyKeyboardBuilder
-
-# Включаем логирование, чтобы не пропустить важные сообщения
-logging.basicConfig(level=logging.INFO)
-
-# Замените "YOUR_BOT_TOKEN" на токен, который вы получили от BotFather
-API_TOKEN = '6806372479:AAHTiIRPU6zFdXlZhpm9mg4bW-e_3kHe3p8'
+import pandas as pd
+import logging
 
 
-# Зададим имя базы данных
-DB_NAME = 'quiz_bot.db'
+#questions = os.path.dirname(sys.argv[0])
+#with open(os.path.join(questions, 'questions.json'), 'rt') as jsonfile:
+    #data = json.load(jsonfile)
+    
+questions = load(open("questions.json", "r", encoding="utf-8"))
+#questions = load(open("C:\Users\ACER\Desktop\Einstein_IQ_Bot-master\bot.py", "r", encoding="utf-8"))
+#"C:\Users\ACER\Desktop\Einstein_IQ_Bot-master\bot.py"
+#bot = Bot(token=config.TOKEN) #Ваш токен
+bot = Bot(token='6806372479:AAHTiIRPU6zFdXlZhpm9mg4bW-e_3kHe3p8')
+#dp = Dispatcher(bot=bot)
+dp = Dispatcher(bot)
 
-DICT_DATA = 'data/quiz_data.json'
-
-
-
-# Объект бота
-bot = Bot(token=API_TOKEN)
-# Диспетчер
-dp = Dispatcher()
-
-if not os.path.exists(DICT_DATA):
-    print(f"The file '{DICT_DATA}' не существует. Пожалуйста создайте его или загрузите из надежного источника.")
-else:
-    #with open(DICT_DATA, 'r') as j:
-        #quiz_data = json.loads(j.read())
-    with open(DICT_DATA, 'r', encoding='utf-8') as j:
-        quiz_data = json.loads(j.read())
-
-#with open(data, 'r') as file:
-    #quiz_data = json.load(file)
-
-#for question in quiz_data:
-    #print(f"Question: {question['question']}")
-    #print(f"Options: {question['options']}")
-    #print()
+#questions = load(open("questions.json", "r", encoding="utf-8"))
 
 
-#with open(DICT_DATA, 'r') as j:
-    #quiz_data = json.loads(j.read())
+def compose_markup(question: int):
+    km = InlineKeyboardMarkup(row_width=3)
+    for i in range(len(questions[question]["variants"])):
+        cd = {
+            "question": question,
+            "answer": i
+        }
+        km.insert(InlineKeyboardButton(questions[question]["variants"][i], callback_data=dumps(cd)))
+    return km
 
-def generate_options_keyboard(answer_options, right_answer):
-    builder = InlineKeyboardBuilder()
 
-    for option in answer_options:
-        builder.add(types.InlineKeyboardButton(
-            text=option,
-            callback_data="right_answer" if option == right_answer else "wrong_answer")
+def reset(uid: int):
+    db.set_in_process(uid, False)
+    db.change_questions_passed(uid, 0)
+    db.change_questions_message(uid, 0)
+    db.change_current_question(uid, 0)
+
+
+@dp.callback_query_handler(lambda c: True)
+async def answer_handler(callback: CallbackQuery):
+    data = loads(callback.data)
+    q = data["question"]
+    is_correct = questions[q]["correct_answer"] - 1 == data["answer"]
+    passed = db.get_questions_passed(callback.from_user.id)
+    msg = db.get_questions_message(callback.from_user.id)
+    if is_correct:
+        passed += 1
+        db.change_questions_passed(callback.from_user.id, passed)
+    if q + 1 > len(questions) - 1:
+        reset(callback.from_user.id)
+        await bot.delete_message(callback.from_user.id, msg)
+        await bot.send_message(
+            callback.from_user.id,
+            f"🎉 *Ура*, вы прошли этот тест\\!\n\n🔒 В любом случает\\, тест завершен\\.\n✅ Правильных ответов\\: *{passed} з {len(questions)}*\\.\n\n🔄 *Пройти тест снова* \\- /play", parse_mode="MarkdownV2"
         )
-
-    builder.adjust(1)
-    return builder.as_markup()
-
-
-@dp.callback_query(F.data == "right_answer")
-async def right_answer(callback: types.CallbackQuery):
-
-    await callback.bot.edit_message_reply_markup(
-        chat_id=callback.from_user.id,
-        message_id=callback.message.message_id,
-        reply_markup=None
+        return
+    await bot.edit_message_text(
+        questions[q + 1]["text"],
+        callback.from_user.id,
+        msg,
+        reply_markup=compose_markup(q + 1),
+        parse_mode="MarkdownV2"
     )
 
-    await callback.message.answer("Верно!")
-    current_question_index = await get_quiz_index(callback.from_user.id)
-    current_score = await get_user_score(callback.from_user.id)
-        # Обновление номера текущего вопроса в базе данных
-    current_question_index += 1
-    await update_quiz_index(callback.from_user.id, current_question_index)
-    await update_user_score(callback.from_user.id, current_score)
 
-    if current_question_index < len(quiz_data):
-        await get_question(callback.message, callback.from_user.id)
-    else:
-        await callback.message.answer("Это был последний вопрос. Квиз завершен!\nВаш результат:{current_score} правильных ответов")
-
-
-@dp.callback_query(F.data == "wrong_answer")
-async def wrong_answer(callback: types.CallbackQuery):
-    await callback.bot.edit_message_reply_markup(
-        chat_id=callback.from_user.id,
-        message_id=callback.message.message_id,
-        reply_markup=None
+@dp.message_handler(commands=["play"])
+async def go_handler(message: Message):
+    if not db.is_exists(message.from_user.id):
+        db.add(message.from_user.id)
+    if db.is_in_process(message.from_user.id):
+        await bot.send_message(message.from_user.id, "🚫 Вы не можете начать тест, потому что *вы уже его проходите*\\.", parse_mode="MarkdownV2")
+        return
+    db.set_in_process(message.from_user.id, True)
+    msg = await bot.send_message(
+        message.from_user.id,
+        questions[0]["text"],
+        reply_markup=compose_markup(0),
+        parse_mode="MarkdownV2"
     )
-
-    # Получение текущего вопроса из словаря состояний пользователя
-    current_question_index = await get_quiz_index(callback.from_user.id)
-    current_score = await  get_user_score(callback.from_user.id, current_score)
-    correct_option = quiz_data[current_question_index]['correct_option']
-
-    await callback.message.answer(f"Неправильно. Правильный ответ: {quiz_data[current_question_index]['options'][correct_option]}")
-
-    # Обновление номера текущего вопроса в базе данных
-    current_question_index += 1
-    await update_quiz_index(callback.from_user.id, current_question_index)
-    await update_user_score(callback.from_user.id, current_score)
-
-    if current_question_index < len(quiz_data):
-        await get_question(callback.message, callback.from_user.id)
-    else:
-        await callback.message.answer("Это был последний вопрос. Квиз завершен!")
+    db.change_questions_message(message.from_user.id, msg.message_id)
+    db.change_current_question(message.from_user.id, 0)
+    db.change_questions_passed(message.from_user.id, 0)
 
 
-# Хэндлер на команду /start
-@dp.message(Command("start"))
-async def cmd_start(message: types.Message):
-    builder = ReplyKeyboardBuilder()
-    builder.add(types.KeyboardButton(text="Начать игру"))
-    await message.answer("Добро пожаловать в квиз!", reply_markup=builder.as_markup(resize_keyboard=True))
+@dp.message_handler(commands=["finish"])
+async def quit_handler(message: Message):
+    if not db.is_in_process(message.from_user.id):
+        await bot.send_message(message.from_user.id, "❗️Вы еще *не начали тест*\\.", parse_mode="MarkdownV2")
+        return
+    reset(message.from_user.id)
+    await bot.send_message(message.from_user.id, "✅ Вы успешно *закончили тест*\\.", parse_mode="MarkdownV2")
 
 
-async def get_question(message, user_id):
-
-    # Получение текущего вопроса из словаря состояний пользователя
-    current_question_index = await get_quiz_index(user_id)
-    correct_index = quiz_data[current_question_index]['correct_option']
-    opts = quiz_data[current_question_index]['options']
-    kb = generate_options_keyboard(opts, opts[correct_index])
-    await message.answer(f"{quiz_data[current_question_index]['question']}", reply_markup=kb)
+@dp.message_handler(commands=["start"])
+async def start(message: Message):
+    await message.answer("👋 *Привет\\!* \n🧠 *Предлагаю проверить ваше логическое мышление\\.*\n\n📝 Необходимо будет ответить на *15 вопросов*\\. \n⏱ Если будете думать как следует, что я рекомендую, тест займет *около 10 минут*\\. \n\n⁉️ *Каждый вопрос* — логичное условие, в соответствии с ситуацией\\. \n📄 Для каждого условия я предлагаю *несколько вариантов ответов*, в соответствии с логикой\\. \n\n⁉️ Правильным является *только один* ответ, его вам и требуется выбрать\\. \n🔍 Постарайтесь *абстрагироваться от реального мира* и принимать решения, основываясь только на этих условиях\\.\n\n*Начать тест* \\- /play\n*Закончить тест* \\- /finish\n*Техническая поддержка* \\- /help", parse_mode="MarkdownV2")
 
 
-#async def new_quiz(message):
-    #user_id = message.from_user.id
-    #current_question_index = 0
-    #new_score = 0
-    #await update_quiz_index(user_id, current_question_index)
-    #await update_user_score(callback.from_user.id, current_score)
-    #await get_question(message, user_id)
+@dp.message_handler(commands=['help'])
+async def cmd_answer(message: Message):
+    await message.answer("⁉️<b> Если у вас есть проблемы.</b> \n✉️ <b>Напишите мне</b> <a href='https://t.me/igo791820'>@igo791820</a><b>.</b>", disable_web_page_preview=True, parse_mode="HTML")
+    
 
-async def new_quiz(callback):
-    user_id = callback.from_user.id
-    current_question_index = 0
-    new_score = 0
-    await update_quiz_index(user_id, current_question_index)
-    await update_user_score(callback, new_score)
+def main() -> None:
+    executor.start_polling(dp, skip_updates=True)
 
-async def get_quiz_index(user_id):
-     # Подключаемся к базе данных
-     async with aiosqlite.connect(DB_NAME) as db:
-        # Получаем запись для заданного пользователя
-        async with db.execute('SELECT question_index FROM quiz_state WHERE user_id = (?)', (user_id, )) as cursor:
-            # Возвращаем результат
-            results = await cursor.fetchone()
-            if results is not None:
-                return results[0]
-            else:
-                return 0
-
-async def get_user_score(user_id):
-    async with aiosqlite.connect(DB_NAME) as db:
-        async with db.execute('SELECT score FROM users WHERE user_id = ?', (user_id,)) as cursor:
-            results = await cursor.fetchone()
-            if results is not None:
-                 return results[0]
-            else:
-                 return 0
-
-
-async def update_quiz_index(user_id, index):
-    # Создаем соединение с базой данных (если она не существует, она будет создана)
-    async with aiosqlite.connect(DB_NAME) as db:
-        # Вставляем новую запись или заменяем ее, если с данным user_id уже существует
-        await db.execute('INSERT OR REPLACE INTO quiz_state (user_id, question_index) VALUES (?, ?)', (user_id, index))
-        # Сохраняем изменения
-        await db.commit()
-
-#async def update_user_score(user_id, new_score):
-
-    #async with aiosqlite.connect(DB_NAME) as db:
-        #await db.execute('INSERT INTO users (user_id, score) VALUES (?,?) ON CONFLICT (user_id) DO UPDATE SET score = excluded.score', (user_id, new_score))
-        #await db.commit()
-
-async def update_user_score(callback, new_score):
-    user_id = callback.from_user.id
-    async with aiosqlite.connect(DB_NAME) as db:
-        await db.execute('INSERT INTO users (user_id, score) VALUES (?,?) ON CONFLICT (user_id) DO UPDATE SET score = excluded.score', (user_id, new_score))
-        await db.commit()
-
-# Хэндлер на команду /quiz
-@dp.message(F.text=="Начать игру")
-@dp.message(Command("quiz"))
-async def cmd_quiz(message: types.Message):
-
-    await message.answer(f"Давайте начнем квиз!")
-    #await new_quiz(message)
-    await new_quiz(message)
-
-async def create_table():
-    # Создаем соединение с базой данных (если она не существует, она будет создана)
-    async with aiosqlite.connect(DB_NAME) as db:
-        # Создаем таблицу
-        await db.execute('''CREATE TABLE IF NOT EXISTS quiz_state (user_id INTEGER PRIMARY KEY, question_index INTEGER)''')
-        await db.execute('''CREATE TABLE IF NOT EXISTS users (user_id INTEGER PRIMARY KEY, score INTEGER)''')
-        # Сохраняем изменения
-        await db.commit()
-
-#Хендлер на команду /Help
-@dp.message(Command("help"))
-async def cmd_start(message:types.Message):
-    await message.answer('Команды бота: \n\start - начать взаимодействие с ботом\n\help - открыть помощь\n\quiz - начать игру')
-
-# Запуск процесса поллинга новых апдейтов
-async def main():
-
-    # Запускаем создание таблицы базы данных
-    await create_table()
-    await dp.start_polling(bot)
 
 if __name__ == "__main__":
-    asyncio.run(main())
-
+    main()
